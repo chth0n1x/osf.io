@@ -51,6 +51,12 @@ class ApprovalStates(ModerationEnum):
     COMPLETED = 6  # Embargo only
     IN_PROGRESS = 7  # Revisions only
 
+class RevisionJustification(ModerationEnum):
+    '''To reduce user input capability for edit justification.'''
+    ADD_RESULTS = 0
+    TYPO_SELF = 1
+    TYPO_OTHER = 2
+    COPY_EDIT = 3
 
 class RegistrationModerationStates(ModerationEnum):
     '''The publication state of a Registration object'''

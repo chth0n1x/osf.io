@@ -14,7 +14,7 @@ from osf.models.schema_response_block import SchemaResponseBlock
 from osf.utils import notifications
 from osf.utils.fields import NonNaiveDateTimeField
 from osf.utils.machines import ApprovalsMachine
-from osf.utils.workflows import ApprovalStates, SchemaResponseTriggers
+from osf.utils.workflows import ApprovalStates, RevisionJustification, SchemaResponseTriggers
 
 from website.mails import mails
 from website.reviews.signals import reviews_email_submit_moderators_notifications
@@ -53,7 +53,12 @@ class SchemaResponse(ObjectIDMixin, BaseModel):
         blank=True
     )
 
-    revision_justification = models.CharField(max_length=2048, null=True, blank=True)
+    revision_justification = models.CharField(
+        choices=RevisionJustification.char_field_choices(),
+        default=RevisionJustification.ADD_RESULTS.db_name,
+        max_length=255, 
+    )
+    
     submitted_timestamp = NonNaiveDateTimeField(null=True, blank=True)
 
     pending_approvers = models.ManyToManyField('osf.osfuser', related_name='pending_submissions')
