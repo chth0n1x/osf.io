@@ -34,6 +34,7 @@ from framework.auth.core import Auth
 from osf.exceptions import ValidationValueError, NodeStateError
 from osf.models import Node, AbstractNode
 from osf.utils.registrations import strip_registered_meta_comments
+from osf.utils.workflows import ApprovalStates
 from framework.sentry import log_exception
 
 class RegistrationSerializer(NodeSerializer):
@@ -68,6 +69,12 @@ class RegistrationSerializer(NodeSerializer):
         'withdrawal_justification',
         'withdrawn',
     ]
+
+    # Union filterable fields unique to the RegistrationSerializer with
+    # filterable fields from the NodeSerializer
+    filterable_fields = NodeSerializer.filterable_fields ^ frozenset([
+        'revision_state',
+    ])
 
     ia_url = ser.URLField(read_only=True)
     reviews_state = ser.CharField(source='moderation_state', read_only=True)
@@ -358,6 +365,8 @@ class RegistrationSerializer(NodeSerializer):
         related_view_kwargs={'node_id': '<_id>'},
     ))
 
+    revision_state = HideIfWithdrawal(ser.CharField(read_only=True, required=False))
+
     @property
     def subjects_related_view(self):
         # Overrides TaxonomizableSerializerMixin
@@ -388,10 +397,15 @@ class RegistrationSerializer(NodeSerializer):
         return None
 
     def get_registration_responses(self, obj):
-        if obj.schema_responses.exists():
-            return self.anonymize_fields(obj, obj.schema_responses.order_by('-created').first().all_responses)
+        latest_approved_response = obj.root.schema_responses.filter(
+            reviews_state=ApprovalStates.APPROVED.db_name,
+        ).first()
+        if latest_approved_response is not None:
+            return self.anonymize_fields(obj, latest_approved_response.all_responses)
+
         if obj.registration_responses:
             return self.anonymize_registration_responses(obj)
+
         return None
 
     def get_embargo_end_date(self, obj):

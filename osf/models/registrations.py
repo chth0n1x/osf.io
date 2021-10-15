@@ -277,6 +277,8 @@ class Registration(AbstractNode):
     @property
     def is_retracted(self):
         root = self._dirty_root
+        if self.moderation_state == RegistrationModerationStates.WITHDRAWN.db_name:
+            return True
         if root.retraction is None:
             return False
         return root.retraction.is_approved
@@ -331,6 +333,21 @@ class Registration(AbstractNode):
         if not self.provider:
             return False
         return self.provider.is_reviewed
+
+    @property
+    def updatable(self):
+        '''Boolean that tells whether a Registration should support adding new SchemaResponses.
+
+        By convention, in order to allow internal flexiblity, this is used to limit creation of
+        SchemaResponses through the API but not on the models.
+        '''
+        if self.deleted or self.is_retracted:
+            return False
+        if self.root_id != self.id:
+            return False
+        if not (self.provider and self.provider.allow_updates):
+            return False
+        return True
 
     @property
     def _dirty_root(self):
@@ -580,36 +597,6 @@ class Registration(AbstractNode):
             block_type='contributors-input', registration_response_key__isnull=False,
         ).values_list('registration_response_key', flat=True)
 
-    def copy_registered_meta_and_registration_responses(self, draft, save=True):
-        """
-        Sets the registration's registered_meta and registration_responses from the draft.
-
-        If contributor information is in a question, build an accurate bibliographic
-        contributors list on the registration
-        """
-        if not self.registered_meta:
-            self.registered_meta = {}
-
-        registration_metadata = draft.registration_metadata
-        registration_responses = draft.registration_responses
-
-        bibliographic_contributors = ', '.join(
-            draft.branched_from.visible_contributors.values_list('fullname', flat=True)
-        )
-        contributor_keys = self.get_contributor_registration_response_keys()
-
-        for key in contributor_keys:
-            if key in registration_metadata:
-                registration_metadata[key]['value'] = bibliographic_contributors
-            if key in registration_responses:
-                registration_responses[key] = bibliographic_contributors
-
-        self.registered_meta[self.registration_schema._id] = registration_metadata
-        self.registration_responses = registration_responses
-
-        if save:
-            self.save()
-
     def _initiate_retraction(self, user, justification=None, moderator_initiated=False):
         """Initiates the retraction process for a registration
         :param user: User who initiated the retraction
@@ -706,6 +693,13 @@ class Registration(AbstractNode):
         :param str comment: Any comment moderator comment associated with the state change;
                 used in reporting Actions.
         '''
+        if self.sanction.SANCTION_TYPE in [SanctionTypes.REGISTRATION_APPROVAL, SanctionTypes.EMBARGO]:
+            if not self.sanction.state == ApprovalStates.COMPLETED.db_name:  # no action needed when Embargo "completes"
+                initial_response = self.schema_responses.last()
+                if initial_response:
+                    initial_response.reviews_state = self.sanction.state
+                    initial_response.save()
+
         from_state = RegistrationModerationStates.from_db_name(self.moderation_state)
 
         active_sanction = self.sanction
@@ -853,6 +847,26 @@ class Registration(AbstractNode):
 
         if settings.SHARE_ENABLED:
             update_share(self)
+
+    def copy_registration_responses_into_schema_response(self, draft_registration=None, save=True):
+        """Copies registration metadata into schema responses"""
+        from osf.models.schema_response import SchemaResponse
+        # TODO: stop populating registration_responses once all registrations
+        #       have had initial responses backfilled
+        if draft_registration:
+            self.registration_responses = draft_registration.registration_responses
+            if save:
+                self.save()
+
+        if self.root is self:  # only create SchemaResposnes on the root registration
+            schema_response = SchemaResponse.create_initial_response(
+                self.creator,
+                self,
+                self.registration_schema
+            )
+            schema_response.update_responses(
+                self.registration_responses
+            )
 
     class Meta:
         # custom permissions for use in the OSF Admin App
@@ -1293,7 +1307,7 @@ class DraftRegistration(ObjectIDMixin, RegistrationResponseMixin, DirtyFieldsMix
         )
         draft.save()
         draft.copy_editable_fields(node, Auth(user), save=True)
-        draft.update(data)
+        draft.update(data, auth=Auth(user))
 
         if node.type == 'osf.draftnode':
             initiator_permissions = draft.contributor_set.get(user=user).permission
